@@ -2,62 +2,65 @@
 # Checks real, transferable balances only. No demo/fake data.
 # Compatible: PowerShell 5.1+, PowerShell Core (pwsh), WSL2
 #
-# Usage:
-#   pwsh ./scripts/wallet_balance.ps1 -SolanaWallet "ADDR" -BscWallet "0xADDR" [-DecryptVault] [-ExportCsv]
+# Chains: SOL, BSC, ETH, TON, MEWC (Meowcoin), HyperEVM
 #
-# Raga Vault key: ~/.raga_key (WSL2: /home/rimuru/.raga_key)
-# Decrypt format: AES-256-GCM via openssl
+# Usage:
+#   pwsh ./scripts/wallet_balance.ps1 \
+#     -SolanaWallet "ADDR" \
+#     -BscWallet "0xADDR" \
+#     -EthWallet "0xADDR" \
+#     -TonWallet "UQADDR" \
+#     -MewcWallet "MADDR" \
+#     -HyperEvmWallet "0xADDR" \
+#     [-DecryptVault] [-ExportCsv]
 
 param(
-  [string]$SolanaWallet = "",
-  [string]$BscWallet    = "",
-  [string]$EthWallet    = "",
-  [string]$TonWallet    = "",
-  [string]$RpcSolana    = "https://api.mainnet-beta.solana.com",
-  [string]$RpcBsc       = "https://rpc.ankr.com/bsc",
-  [string]$RpcEth       = "https://rpc.ankr.com/eth",
-  [string]$RagaKeyPath  = "",   # auto-detected if empty
-  [switch]$DecryptVault,        # run openssl decrypt before balance check
+  [string]$SolanaWallet    = "",
+  [string]$BscWallet       = "",
+  [string]$EthWallet       = "",
+  [string]$TonWallet       = "",
+  [string]$MewcWallet      = "",
+  [string]$HyperEvmWallet  = "",
+  [string]$RpcSolana       = "https://api.mainnet-beta.solana.com",
+  [string]$RpcBsc          = "https://rpc.ankr.com/bsc",
+  [string]$RpcEth          = "https://rpc.ankr.com/eth",
+  [string]$RpcHyperEvm     = "https://rpc.hyperliquid.xyz/evm",
+  [string]$MewcPool        = "https://mewc.woolypooly.com",
+  [string]$RagaKeyPath     = "",
+  [switch]$DecryptVault,
   [switch]$ExportCsv
 )
 
 # ── RAGA KEY PATH (WSL2 safe) ────────────────────────────────────────────────
 if (-not $RagaKeyPath) {
-  # Prefer $env:HOME (correct in WSL2/Linux), fallback to Windows home
   if ($env:HOME -and (Test-Path "$env:HOME/.raga_key")) {
     $RagaKeyPath = "$env:HOME/.raga_key"
   } elseif (Test-Path "$HOME/.raga_key") {
     $RagaKeyPath = "$HOME/.raga_key"
   } else {
-    $RagaKeyPath = "/home/rimuru/.raga_key"  # hardcoded WSL2 fallback
+    $RagaKeyPath = "/home/rimuru/.raga_key"
   }
 }
-Write-Host "Raga key path: $RagaKeyPath" -ForegroundColor DarkGray
+Write-Host "Raga key: $RagaKeyPath" -ForegroundColor DarkGray
 if (-not (Test-Path $RagaKeyPath)) {
   Write-Warning "~/.raga_key NOT FOUND at: $RagaKeyPath"
-  Write-Warning "Create it with: openssl rand -base64 32 > $RagaKeyPath && chmod 600 $RagaKeyPath"
+  Write-Warning "Fix: openssl rand -base64 32 > $RagaKeyPath && chmod 600 $RagaKeyPath"
 }
 
-# ── OPTIONAL VAULT DECRYPT ───────────────────────────────────────────────────
+# ── OPTIONAL VAULT DECRYPT ──────────────────────────────────────────────────
 if ($DecryptVault) {
   Write-Host "`nDecrypting Raga Vault backup..." -ForegroundColor Cyan
   $encFile = Join-Path $PSScriptRoot "../backup/vault.enc"
   $outFile = Join-Path $PSScriptRoot "../backup/vault_decrypted.sql"
   if (Test-Path $encFile) {
     $cmd = "openssl enc -d -aes-256-gcm -pbkdf2 -in `"$encFile`" -out `"$outFile`" -pass file:`"$RagaKeyPath`""
-    Write-Host "  Running: $cmd" -ForegroundColor DarkGray
     Invoke-Expression $cmd
-    if ($LASTEXITCODE -eq 0) {
-      Write-Host "  Vault decrypted -> $outFile" -ForegroundColor Green
-    } else {
-      Write-Warning "  Decrypt failed. Check key at: $RagaKeyPath"
-    }
-  } else {
-    Write-Warning "  vault.enc not found at: $encFile"
-  }
+    if ($LASTEXITCODE -eq 0) { Write-Host "  Decrypted -> $outFile" -ForegroundColor Green }
+    else { Write-Warning "  Decrypt failed. Check key: $RagaKeyPath" }
+  } else { Write-Warning "  vault.enc not found: $encFile" }
 }
 
-# ── HEX TO DECIMAL (no BigInteger, pure PS math) ─────────────────────────────
+# ── HELPERS ─────────────────────────────────────────────────────────────────────
 function Hex-ToDecimal($hex) {
   $hex = ($hex -replace '^0x', '').TrimStart('0')
   if ([string]::IsNullOrEmpty($hex)) { return [decimal]0 }
@@ -68,7 +71,6 @@ function Hex-ToDecimal($hex) {
   return $result
 }
 
-# ── JSON-RPC HELPER ───────────────────────────────────────────────────────────
 function Get-JsonRpc($Url, $Method, $Params) {
   $body = @{ jsonrpc = "2.0"; id = 1; method = $Method; params = $Params } | ConvertTo-Json -Depth 10
   try {
@@ -128,6 +130,42 @@ if ($TonWallet) {
   } catch { Write-Warning "  TON: $_" }
 }
 
+# ── MEOWCOIN (MEWC) ─────────────────────────────────────────────────────────
+# Uses mewc.tokenview.io public explorer API (no key required)
+if ($MewcWallet) {
+  Write-Host "`nChecking MEWC (Meowcoin)..." -ForegroundColor Cyan
+  try {
+    $url = "https://mewc.tokenview.io/api/address/balance/$MewcWallet"
+    $r = Invoke-RestMethod -Uri $url -TimeoutSec 20
+    if ($r -and $r.data -ne $null) {
+      $mewc = [math]::Round([decimal]$r.data, 8)
+      Write-Host "  MEWC: $mewc" -ForegroundColor Green
+      $rows += [pscustomobject]@{ Chain='MEWC'; Wallet=$MewcWallet; Balance=$mewc; Unit='MEWC'; Timestamp=(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') }
+    } else {
+      # Fallback: woolypooly miner stats (shows unpaid balance for your worker)
+      Write-Warning "  MEWC tokenview failed, trying pool stats..."
+      $poolUrl = "https://mewc.woolypooly.com/api/v2/wallets/$MewcWallet"
+      $p = Invoke-RestMethod -Uri $poolUrl -TimeoutSec 20
+      if ($p -and $p.balance -ne $null) {
+        $mewc = [math]::Round([decimal]$p.balance, 8)
+        Write-Host "  MEWC (pool unpaid): $mewc" -ForegroundColor Yellow
+        $rows += [pscustomobject]@{ Chain='MEWC(pool)'; Wallet=$MewcWallet; Balance=$mewc; Unit='MEWC'; Timestamp=(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') }
+      } else { Write-Warning "  MEWC: both explorer and pool API returned no data" }
+    }
+  } catch { Write-Warning "  MEWC: $_" }
+}
+
+# ── HYPEREVM (HyperLiquid L1, Chain ID 999) ───────────────────────────────
+if ($HyperEvmWallet) {
+  Write-Host "`nChecking HyperEVM..." -ForegroundColor Cyan
+  $r = Get-JsonRpc $RpcHyperEvm "eth_getBalance" @($HyperEvmWallet, "latest")
+  if ($r -and $r.result) {
+    $hype = [math]::Round((Hex-ToDecimal $r.result) / 1e18, 9)
+    Write-Host "  HYPE: $hype" -ForegroundColor Green
+    $rows += [pscustomobject]@{ Chain='HyperEVM'; Wallet=$HyperEvmWallet; Balance=$hype; Unit='HYPE'; Timestamp=(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') }
+  } else { Write-Warning "  HyperEVM: no result" }
+}
+
 # ── OUTPUT ────────────────────────────────────────────────────────────────────
 Write-Host ""
 if ($rows.Count -gt 0) {
@@ -145,5 +183,5 @@ if ($rows.Count -gt 0) {
   }
 } else {
   Write-Host "No wallets provided or all RPCs failed." -ForegroundColor Red
-  Write-Host "Usage: pwsh ./scripts/wallet_balance.ps1 -SolanaWallet 'ADDR' -BscWallet '0xADDR' [-DecryptVault] [-ExportCsv]"
+  Write-Host "Usage: pwsh ./scripts/wallet_balance.ps1 -SolanaWallet 'ADDR' -MewcWallet 'MADDR' -HyperEvmWallet '0xADDR' [-ExportCsv]"
 }
