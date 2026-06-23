@@ -1,0 +1,19 @@
+# shj_void — Shadow Monarch Agent Container
+# Extends Open-WebUI with empire environment baked in
+
+FROM ghcr.io/open-webui/open-webui:main
+
+LABEL maintainer="Rimuru Empire"
+LABEL agent="shj_void"
+LABEL persona="sung_jin_woo"
+LABEL version="1.0.0"
+
+ENV AGENT_NAME=shj_void
+ENV AGENT_PORT=8004
+ENV AGENT_ROLE="Shadow Commander"
+ENV THEME_COLOR="#1a0033"
+ENV LOG_ZERO=true
+ENV STEALTH_MODE=true
+ENV PERSONA=sung_jin_woo
+
+EXPOSE 8080
